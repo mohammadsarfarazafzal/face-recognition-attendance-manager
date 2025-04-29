@@ -124,14 +124,7 @@ npm run dev
 - Implement attendance history
 - Export attendance reports
 - Add mobile responsiveness
-- Real-time video processing
 - Attendance statistics and analytics
-
-## Development Team
-- [Your Name]
-- Roll Number: [Your Roll Number]
-- Course: [Course Name]
-- Semester: [Semester Number]
 
 ## License
 This project is licensed under the MIT License - see the LICENSE file for details.
