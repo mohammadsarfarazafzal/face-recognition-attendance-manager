@@ -108,7 +108,7 @@ export default function App() {
         {/* Student Table */}
         <div className="bg-white rounded-xl shadow-lg p-6">
           <h2 className="text-2xl font-semibold mb-4">Students</h2>
-          <CharacterTable 
+          <StudentTable 
             students={students} 
             presentStudents={presentStudents} 
           />
