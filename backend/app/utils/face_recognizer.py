@@ -7,7 +7,7 @@ import json
 
 class FaceRecognizer:
     def __init__(self):
-        self.BASE_DIR = Path(__file__).parent
+        self.BASE_DIR = Path(__file__).parent.parent
         self.load_encodings()
         self.load_student_map()
         self.validate_mapping()

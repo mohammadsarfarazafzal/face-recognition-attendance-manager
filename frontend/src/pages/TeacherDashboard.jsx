@@ -1,41 +1,37 @@
 // frontend/src/pages/TeacherDashboard.jsx
-import { useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
+import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
 
 export default function TeacherDashboard() {
-  const [stats, setStats] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(true);
 
   // TeacherDashboard.jsx  (fixed)
 
-useEffect(() => {
-  const fetchDashboardStats = async () => {
-    try {
-      const response = await fetch("http://localhost:5000/dashboard/stats", {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json",
-          "user_id": localStorage.getItem("user_id")   // 🔥 REQUIRED
+  useEffect(() => {
+    const fetchDashboardStats = async () => {
+      try {
+        const response = await fetch("http://localhost:5000/dashboard/stats", {
+          method: "GET",
+          headers: {
+            "x-user-id": localStorage.getItem("user_id"),
+          },
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+          setStats(data);
+        } else {
+          console.error("Dashboard API error:", data.error);
         }
-      });
-
-      const data = await response.json();
-      console.log("Dashboard stats:", data);
-
-      if (response.ok) {
-        setStats(data);
-      } else {
-        console.error("Dashboard API error:", data.error);
+      } catch (err) {
+        console.error("Network error:", err);
       }
-    } catch (err) {
-      console.error("Network error:", err);
-    }
-  };
+    };
 
-  fetchDashboardStats();
-}, []);
-
-
+    fetchDashboardStats();
+  }, []);
 
   return (
     <div>
@@ -53,7 +49,9 @@ useEffect(() => {
             </div>
             <div className="ml-4">
               <p className="text-sm font-medium text-gray-600">Total Classes</p>
-              <p className="text-2xl font-semibold text-gray-900">{stats?.total_classes || 0}</p>
+              <p className="text-2xl font-semibold text-gray-900">
+                {stats?.total_classes || 0}
+              </p>
             </div>
           </div>
         </div>
@@ -64,8 +62,12 @@ useEffect(() => {
               <span className="text-green-600 text-xl">👥</span>
             </div>
             <div className="ml-4">
-              <p className="text-sm font-medium text-gray-600">Total Students</p>
-              <p className="text-2xl font-semibold text-gray-900">{stats?.total_students || 0}</p>
+              <p className="text-sm font-medium text-gray-600">
+                Total Students
+              </p>
+              <p className="text-2xl font-semibold text-gray-900">
+                {stats?.total_students || 0}
+              </p>
             </div>
           </div>
         </div>
@@ -87,22 +89,26 @@ useEffect(() => {
 
       {/* Quick Actions */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-        <Link 
+        <Link
           to="/teacher/attendance/mark"
           className="bg-white p-6 rounded-lg shadow-md border-2 border-dashed border-gray-300 hover:border-blue-500 transition-colors text-center"
         >
           <div className="text-4xl mb-4">📸</div>
           <h3 className="text-lg font-semibold mb-2">Mark Attendance</h3>
-          <p className="text-gray-600">Take a class photo and mark attendance automatically</p>
+          <p className="text-gray-600">
+            Take a class photo and mark attendance automatically
+          </p>
         </Link>
 
-        <Link 
+        <Link
           to="/teacher/attendance/history"
           className="bg-white p-6 rounded-lg shadow-md border-2 border-dashed border-gray-300 hover:border-green-500 transition-colors text-center"
         >
           <div className="text-4xl mb-4">📊</div>
           <h3 className="text-lg font-semibold mb-2">View History</h3>
-          <p className="text-gray-600">Check attendance records and export reports</p>
+          <p className="text-gray-600">
+            Check attendance records and export reports
+          </p>
         </Link>
       </div>
 
@@ -112,10 +118,15 @@ useEffect(() => {
           <h3 className="text-lg font-semibold mb-4">Recent Attendance</h3>
           <div className="space-y-3">
             {stats.recent_attendance.map((record, index) => (
-              <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+              <div
+                key={index}
+                className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+              >
                 <div>
                   <p className="font-medium">{record.student}</p>
-                  <p className="text-sm text-gray-600">{record.subject} • {record.date}</p>
+                  <p className="text-sm text-gray-600">
+                    {record.subject} • {record.date}
+                  </p>
                 </div>
                 <span className="bg-green-100 text-green-800 px-2 py-1 rounded text-sm">
                   {record.marks} marks
@@ -126,5 +137,5 @@ useEffect(() => {
         </div>
       )}
     </div>
-  )
+  );
 }

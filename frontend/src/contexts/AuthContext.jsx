@@ -30,9 +30,6 @@ export function AuthProvider({ children }) {
   }, []);
 
   const login = (userId, userData) => {
-    console.log("🔐 Login called");
-    console.log("Received user_id:", userId);
-    console.log("User data:", userData);
 
     // store in localStorage
     localStorage.setItem("user_id", userId);
@@ -42,7 +39,6 @@ export function AuthProvider({ children }) {
   };
 
   const logout = () => {
-    console.log("🚪 Logging out...");
     localStorage.removeItem("user_id");
     localStorage.removeItem("user");
     setUser(null);

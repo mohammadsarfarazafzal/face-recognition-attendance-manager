@@ -11,6 +11,12 @@
     "name": "Anurag Tiwari",
     "department": "Computer Science"
   },
+  "arpita@example.com": {
+    "student_id": 14,
+    "roll_number": "15",
+    "name": "Arpita Barik",
+    "department": "Computer Science"
+  },
   "debaprio@example.com": {
     "student_id": 2,
     "roll_number": "2",
@@ -21,6 +27,12 @@
     "student_id": 3,
     "roll_number": "3",
     "name": "Debendar Choudhary",
+    "department": "Computer Science"
+  },
+  "divya@example.com": {
+    "student_id": 15,
+    "roll_number": "16",
+    "name": "Divya Rampuria",
     "department": "Computer Science"
   },
   "kunal@example.com": {

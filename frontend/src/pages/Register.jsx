@@ -38,10 +38,8 @@ export default function Register() {
 
       const data = await response.json()
 
-      if (response.ok) {
-        // JWT removed -> login using user_id + user
-        login(data.user_id, data.user)
-        navigate(`/${data.user.role}/dashboard`)
+      if (data.message=="Registered") {
+        navigate(`/login`)
       } else {
         setError(data.error || 'Registration failed')
       }

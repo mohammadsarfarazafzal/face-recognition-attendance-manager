@@ -8,8 +8,8 @@ with app.app_context():
     if teacher:
         # Create a test subject
         subject = Subject(
-            name='Mathematics',
-            code='MATH101',
+            name='English',
+            code='ENG101',
             credits=3,
             department='Computer Science',
             semester=7,

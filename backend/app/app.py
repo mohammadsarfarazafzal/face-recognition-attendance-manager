@@ -3,7 +3,7 @@
 from flask import Flask, request, jsonify, send_file
 from flask_sqlalchemy import SQLAlchemy
 from flask_bcrypt import Bcrypt
-from flask_cors import CORS
+from flask_cors import CORS, cross_origin
 import face_recognition
 import pickle
 import numpy as np
@@ -23,7 +23,17 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 # Initialize
 db = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
-CORS(app, supports_credentials=True, allow_headers=["Content-Type", "user_id"])
+from flask_cors import CORS
+
+CORS(app,
+     supports_credentials=True,
+     resources={r"/*": {
+         "origins": "*"
+     }},
+     allow_headers=["Content-Type", "Authorization", "x-user-id"]
+)
+
+
 
 # -------------------- MODELS --------------------
 
@@ -97,12 +107,8 @@ REFERENCE_ENCODINGS_DIR.mkdir(exist_ok=True)
 
 def get_user():
     """Fetch user_id sent from frontend via headers."""
-    # uid = request.headers.get("user_id")
-    uid = (
-    request.headers.get("user_id")
-    or request.headers.get("User-Id")
-    or request.headers.get("User_Id")
-)
+    uid = request.headers.get("x-user-id")
+
     if not uid:
         return None, jsonify({"error": "Missing user_id in headers"}), 400
 
@@ -200,15 +206,33 @@ def login():
 # -------------------- DASHBOARD --------------------
 
 @app.route('/dashboard/stats', methods=['GET'])
+@cross_origin(origins=["http://localhost:5173"])
 def get_dashboard_stats():
     user, err, code = get_user()
-    print(user)
     if err: return err, code
 
     if user.role == "teacher":
         teacher = Teacher.query.filter_by(user_id=user.id).first()
 
-        total_classes = AttendanceSession.query.filter_by(teacher_id=teacher.id).count()
+        from sqlalchemy import func
+
+        from sqlalchemy import func
+
+        total_classes = db.session.query(
+            func.count(
+                func.distinct(
+                    func.concat(
+                        AttendanceSession.date,
+                        "-",
+                        AttendanceSession.subject_id
+                    )
+                )
+            )
+        ).filter(
+            AttendanceSession.teacher_id == teacher.id
+        ).scalar()
+
+
         total_students = Student.query.count()
 
         recent = Attendance.query.join(Subject) \
@@ -230,22 +254,182 @@ def get_dashboard_stats():
         })
 
     # Student Dashboard
+    from sqlalchemy import func
+
     student = Student.query.filter_by(user_id=user.id).first()
+
     subjects = Subject.query.filter_by(
         department=student.department,
         semester=student.semester
     ).all()
 
-    total = Attendance.query.filter_by(student_id=student.id).count()
-    present = Attendance.query.filter_by(student_id=student.id, status="present").count()
+    response_subjects = []
 
-    percentage = round((present / total * 100), 2) if total > 0 else 0
+    for s in subjects:
+        # UNIQUE class sessions
+        total_classes = db.session.query(
+            func.count(func.distinct(AttendanceSession.date))
+        ).filter(
+            AttendanceSession.subject_id == s.id
+        ).scalar()
+
+        # UNIQUE attended classes
+        present_classes = db.session.query(
+            func.count(func.distinct(Attendance.date))
+        ).filter(
+            Attendance.subject_id == s.id,
+            Attendance.student_id == student.id,
+            Attendance.status == "present"
+        ).scalar()
+
+        percentage = (
+            round((present_classes / total_classes) * 100, 2)
+            if total_classes > 0 else 0
+        )
+
+        response_subjects.append({
+            "subject": s.name,
+            "code": s.code,
+            "total_classes": total_classes,
+            "present_classes": present_classes,
+            "percentage": percentage
+        })
+
+    overall_total = sum(s["total_classes"] for s in response_subjects)
+    overall_present = sum(s["present_classes"] for s in response_subjects)
 
     return jsonify({
-        "overall_percentage": percentage,
-        "total_classes": total,
-        "total_present": present
+        "overall_percentage": (
+            round(sum(sub["percentage"] for sub in response_subjects) / len(response_subjects), 2)
+            if response_subjects else 0
+        ),
+        "total_classes": overall_total,
+        "total_present": overall_present,
+        "subjects": response_subjects
     })
+
+
+
+
+@app.route('/teacher/register-student-with-photo', methods=['POST'])
+def register_student_with_photo():
+    user, err, code = get_user()
+    if err:
+        return err, code
+
+    if user.role != "teacher":
+        return jsonify({"error": "Only teachers can register students"}), 403
+
+    # Form fields
+    name = request.form.get("name")
+    email = request.form.get("email")
+    roll = request.form.get("roll_number")
+    department = request.form.get("department")
+    semester = request.form.get("semester")
+    photo = request.files.get("photo")
+
+    if not all([name, email, roll, department, semester, photo]):
+        return jsonify({"error": "Missing fields"}), 400
+
+    # Check email exists
+    if User.query.filter_by(email=email).first():
+        return jsonify({"error": "Email already registered"}), 400
+
+    # Save user
+    new_user = User(
+        email=email,
+        password=bcrypt.generate_password_hash("123456").decode(),
+        role="student",
+        name=name
+    )
+    db.session.add(new_user)
+    db.session.flush()
+
+    # Save student
+    new_student = Student(
+        user_id=new_user.id,
+        roll_number=roll,
+        department=department,
+        semester=int(semester),
+    )
+    db.session.add(new_student)
+    db.session.commit()
+
+    # Process face
+    uploads = BASE_DIR / "uploads"
+    uploads.mkdir(exist_ok=True)
+    temp_path = uploads / f"reg_{new_user.id}.jpg"
+    photo.save(temp_path)
+
+    # Load & encode
+    img = face_recognition.load_image_file(temp_path)
+    encodings = face_recognition.face_encodings(img)
+
+    if len(encodings) == 0:
+        temp_path.unlink()
+        return jsonify({"error": "No face detected"}), 400
+
+    encoding = encodings[0]
+
+    # Save encoding
+    enc_path = REFERENCE_ENCODINGS_DIR / f"{new_user.id}.pkl"
+    with open(enc_path, "wb") as f:
+        pickle.dump(encoding, f)
+
+    # Update map
+    student_map = load_student_map()
+    student_map[str(new_user.id)] = {
+        "name": name,
+        "email": email,
+        "roll": roll,
+        "department": department,
+        "semester": semester
+    }
+    save_student_map(student_map)
+
+    temp_path.unlink()
+
+    return jsonify({
+        "message": "✅ Student registered successfully",
+        "student_id": new_student.id,
+        "user_id": new_user.id
+    }), 200
+
+
+@app.route('/student/profile', methods=['GET'])
+def student_profile():
+    user, err, code = get_user()
+    if err:
+        return err, code
+
+    if user.role != "student":
+        return jsonify({"error": "Only students"}), 403
+
+    student = Student.query.filter_by(user_id=user.id).first()
+    if not student:
+        return jsonify({"error": "Student record missing"}), 404
+
+    total = Attendance.query.filter_by(student_id=student.id).count()
+    present = Attendance.query.filter_by(
+        student_id=student.id,
+        status="present"
+    ).count()
+
+    attendance_percentage = round((present / total * 100), 2) if total > 0 else 0
+
+    return jsonify({
+        "name": user.name,
+        "email": user.email,
+        "roll_number": student.roll_number,
+        "department": student.department,
+        "semester": student.semester,
+        "attendance": {
+            "total_classes": total,
+            "present": present,
+            "percentage": attendance_percentage
+        }
+    })
+
 
 # -------------------- SUBJECTS --------------------
 
@@ -275,6 +459,7 @@ def get_subjects():
 # -------------------- ATTENDANCE + FACE --------------------
 
 @app.route('/attendance/mark', methods=['POST'])
+@cross_origin(origins=["http://localhost:5173"])
 def mark_attendance():
     user, err, code = get_user()
     if err: return err, code
@@ -295,7 +480,7 @@ def mark_attendance():
     temp_path = uploads / f"temp_{datetime.now().timestamp()}.jpg"
     file.save(temp_path)
 
-    from face_recognizer import FaceRecognizer
+    from utils.face_recognizer import FaceRecognizer
     recognizer = FaceRecognizer()
     results = recognizer.recognize_students(str(temp_path))
 
@@ -336,8 +521,7 @@ def mark_attendance():
                 status='present'
             )
             db.session.add(att)
-            marked += 1
-
+        marked += 1
         detected.append(r)
 
     db.session.commit()
@@ -347,47 +531,134 @@ def mark_attendance():
         "detected": detected
     })
 
-# -------------------- EXPORT --------------------
 
-@app.route('/attendance/export', methods=['GET'])
-def export_attendance():
-    user, err, code = get_user()
-    if err: return err, code
+# ===============================
+#   ATTENDANCE HISTORY API
+# ===============================
 
-    if user.role != 'teacher':
-        return jsonify({"error": "Only teachers"}), 403
 
-    teacher = Teacher.query.filter_by(user_id=user.id).first()
+from sqlalchemy import extract
 
-    query = Attendance.query.join(Subject).filter(Subject.teacher_id == teacher.id)
-    subject_code = request.args.get("subject")
-    if subject_code:
-        query = query.filter(Subject.code == subject_code)
+from datetime import datetime
+
+@app.route("/attendance/history", methods=["GET"])
+def attendance_history():
+    user_id = request.headers.get("x-user-id")
+    if not user_id:
+        return jsonify({"error": "Missing x-user-id"}), 400
+
+    subject = request.args.get("subject", "").strip()
+    date_from = request.args.get("date_from", "").strip()
+    date_to = request.args.get("date_to", "").strip()
+
+    # Correct join: Attendance -> Student -> User
+    query = Attendance.query \
+        .join(Student, Attendance.student_id == Student.id) \
+        .join(User, Student.user_id == User.id) \
+        .join(Subject, Attendance.subject_id == Subject.id)
+
+    # Filter by subject code
+    if subject:
+        query = query.filter(Subject.code == subject)
+
+    # Filter date_from (string compare fine due to YYYY-MM-DD)
+    if date_from:
+        query = query.filter(Attendance.date >= date_from)
+
+    # Filter date_to
+    if date_to:
+        query = query.filter(Attendance.date <= date_to)
+
+    records = query.order_by(Attendance.date.desc()).all()
+
+    output = []
+    for r in records:
+        student_user = User.query.get(r.student.user_id)
+
+        output.append({
+            "student": student_user.name,
+            "roll": r.student.roll_number,
+            "department": r.student.department,
+            "subject": r.subject.name,
+            "subject_code": r.subject.code,
+            "date": r.date,
+            "status": r.status,
+            "marks": r.marks,
+            "marked_at": r.created_at.strftime("%Y-%m-%d %I:%M %p")
+        })
+
+    return jsonify({"records": output}), 200
+
+
+# ===============================
+#   ATTENDANCE EXPORT (CSV)
+# ===============================
+import csv
+from io import StringIO
+from flask import Response
+
+@app.route("/attendance/export", methods=["GET"])
+@cross_origin(origins=["http://localhost:5173"])
+def attendance_export():
+    user_id = request.headers.get("x-user-id")
+
+    if not user_id:
+        return jsonify({"error": "Missing user_id"}), 400
+
+    # Same filters as history
+    date = request.args.get("date")
+    month = request.args.get("month")
+    year = request.args.get("year")
+    student_id = request.args.get("student_id")
+    department = request.args.get("department")
+
+    query = Attendance.query.join(User, Attendance.student_id == User.id)
+
+    if date:
+        query = query.filter(Attendance.date == date)
+
+    if month and year:
+        query = query.filter(
+            extract("month", Attendance.date) == int(month),
+            extract("year", Attendance.date) == int(year)
+        )
+
+    if student_id:
+        query = query.filter(Attendance.student_id == student_id)
+
+    if department:
+        query = query.filter(User.department == department)
 
     records = query.all()
 
-    data = [{
-        "Date": r.date,
-        "Subject": r.subject.name,
-        "Student": r.student.user.name,
-        "Roll": r.student.roll_number,
-        "Marks": r.marks,
-        "Status": r.status
-    } for r in records]
+    # Build CSV
+    si = StringIO()
+    writer = csv.writer(si)
+    writer.writerow(["Student", "Roll", "Department", "Date", "Time", "Status"])
 
-    df = pd.DataFrame(data)
+    for r in records:
+        student = User.query.get(r.student_id)
+        writer.writerow([
+            student.name,
+            student.roll,
+            student.department,
+            r.date.strftime("%Y-%m-%d"),
+            r.timestamp.strftime("%I:%M %p"),
+            "Present"
+        ])
 
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Attendance")
-    output.seek(0)
+    output = si.getvalue()
+    si.close()
 
-    return send_file(output,
-                     download_name=f"attendance_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                     as_attachment=True)
+    return Response(
+        output,
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=attendance_export.csv"}
+    )
+
 
 # -------------------- MAIN --------------------
 
 if __name__ == '__main__':
-    print("\nAPI running WITHOUT JWT\n")
+    print("\nAPI running\n")
     app.run(debug=True, port=5000)
