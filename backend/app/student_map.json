@@ -1,10 +1,80 @@
 {
-  "Nishant_Kumar_Bhadani": "152",
-  "Anurag_Tiwari":"103",
-  "Kunal_Sharma":"106",
-  "Debendar_Choudhary":"135",
-  "Md_Adil_Farhan":"083",
-  "Tanmay_Kumar":"088",
-  "Nahid_Azad":"092",
-  "Md_Sarfaraz_Afzal":"084"
+  "adil@example.com": {
+    "student_id": 5,
+    "roll_number": "5",
+    "name": "Md Adil Farhan",
+    "department": "Computer Science"
+  },
+  "anurag@example.com": {
+    "student_id": 1,
+    "roll_number": "1",
+    "name": "Anurag Tiwari",
+    "department": "Computer Science"
+  },
+  "debaprio@example.com": {
+    "student_id": 2,
+    "roll_number": "2",
+    "name": "Debaprio Bhowmchick",
+    "department": "Computer Science"
+  },
+  "debendar@example.com": {
+    "student_id": 3,
+    "roll_number": "3",
+    "name": "Debendar Choudhary",
+    "department": "Computer Science"
+  },
+  "kunal@example.com": {
+    "student_id": 4,
+    "roll_number": "4",
+    "name": "Kunal Sharma",
+    "department": "Computer Science"
+  },
+  "nahid@example.com": {
+    "student_id": 7,
+    "roll_number": "7",
+    "name": "Nahid Azad",
+    "department": "Computer Science"
+  },
+  "nishant@example.com": {
+    "student_id": 8,
+    "roll_number": "8",
+    "name": "Nishant Kumar Bhadani",
+    "department": "Computer Science"
+  },
+  "prasun@example.com": {
+    "student_id": 9,
+    "roll_number": "9",
+    "name": "Prasun Kumar",
+    "department": "Computer Science"
+  },
+  "sarfaraz@example.com": {
+    "student_id": 6,
+    "roll_number": "6",
+    "name": "Md Sarfaraz Afzal",
+    "department": "Computer Science"
+  },
+  "shubranil@example.com": {
+    "student_id": 10,
+    "roll_number": "10",
+    "name": "Shubranil Bhunia",
+    "department": "Computer Science"
+  },
+  "sohan@example.com": {
+    "student_id": 11,
+    "roll_number": "11",
+    "name": "Sohan Chatterjee",
+    "department": "Computer Science"
+  },
+  "tanmay@example.com": {
+    "student_id": 12,
+    "roll_number": "12",
+    "name": "Tanmay Kumar",
+    "department": "Computer Science"
+  },
+  "tarpan@example.com": {
+    "student_id": 13,
+    "roll_number": "13",
+    "name": "Tarpan",
+    "department": "Computer Science"
+  }
 }
