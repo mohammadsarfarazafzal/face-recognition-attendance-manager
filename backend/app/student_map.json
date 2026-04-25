@@ -59,6 +59,12 @@
     "name": "Prasun Kumar",
     "department": "Computer Science"
   },
+  "rishita@example.com": {
+    "student_id": 16,
+    "roll_number": "14",
+    "name": "Rishita Saha",
+    "department": "Computer Science"
+  },
   "sarfaraz@example.com": {
     "student_id": 6,
     "roll_number": "6",
