@@ -1,23 +1,21 @@
-// frontend/src/pages/TeacherRegisterStudent.jsx
+// frontend/src/pages/TeacherRegisterStudent.jsx — Premium redesign
 import { useState } from "react";
+import { User, AlertTriangle } from "lucide-react";
 
 export default function TeacherRegisterStudent() {
   const [formData, setFormData] = useState({
-    name: "",
-    email: "",
-    roll_number: "",
-    department: "Computer Science",
-    semester: 1,
-    academic_year: "2024-2025",
+    name: "", email: "", roll_number: "",
+    department: "Computer Science", semester: 1, academic_year: "2024-2025",
   });
   const [photo, setPhoto] = useState(null);
   const [photoPreview, setPhotoPreview] = useState("");
   const [message, setMessage] = useState("");
+  const [qualityIssues, setQualityIssues] = useState([]);
+  const [qualityWarnings, setQualityWarnings] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  const handleChange = (e) => {
+  const handleChange = (e) =>
     setFormData((prev) => ({ ...prev, [e.target.name]: e.target.value }));
-  };
 
   const handlePhotoChange = (e) => {
     const file = e.target.files[0];
@@ -31,11 +29,12 @@ export default function TeacherRegisterStudent() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-
     if (!photo) return setMessage("Please upload a student photo");
 
     setLoading(true);
     setMessage("");
+    setQualityIssues([]);
+    setQualityWarnings([]);
 
     try {
       const fd = new FormData();
@@ -43,199 +42,154 @@ export default function TeacherRegisterStudent() {
       fd.append("photo", photo);
 
       const response = await fetch(
-        "http://localhost:5000/teacher/register-student-with-photo",
+        `http://${window.location.hostname}:5000/teacher/register-student-with-photo`,
         {
           method: "POST",
-          headers: {
-            "x-user-id": localStorage.getItem("user_id"),
-          },
+          headers: { "x-user-id": localStorage.getItem("user_id") },
           body: fd,
         }
       );
-
       const data = await response.json();
 
       if (response.ok) {
         setMessage(`Student ${formData.name} registered successfully!`);
+        if (data.quality_warnings) setQualityWarnings(data.quality_warnings);
+        // Reset form
+        setFormData({ name: "", email: "", roll_number: "", department: "Computer Science", semester: 1, academic_year: "2024-2025" });
+        setPhoto(null);
+        setPhotoPreview("");
       } else {
         setMessage("Error: " + data.error);
+        if (data.quality_issues) setQualityIssues(data.quality_issues);
+        if (data.quality_warnings) setQualityWarnings(data.quality_warnings);
       }
-    } catch (e) {
+    } catch {
       setMessage("Network error");
     } finally {
       setLoading(false);
     }
   };
 
+  const inputClass = "w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-400 text-sm bg-white transition-all";
+
   return (
-    <div className="max-w-2xl mx-auto py-8">
-      <div className="bg-white rounded-lg shadow-md p-6">
-        <h1 className="text-2xl font-bold mb-6">Register New Student</h1>
+    <div className="max-w-2xl mx-auto space-y-6 animate-fade-in">
+      <div>
+        <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Register Student</h1>
+        <p className="text-gray-500 mt-1">Add a new student with their face photo for recognition</p>
+      </div>
 
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 sm:p-8">
+        <form onSubmit={handleSubmit} className="space-y-5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Student Name *
-              </label>
-              <input
-                type="text"
-                name="name"
-                value={formData.name}
-                onChange={handleChange}
-                required
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Student Name *</label>
+              <input type="text" name="name" value={formData.name} onChange={handleChange} required className={inputClass} placeholder="John Doe" />
             </div>
-
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Email *
-              </label>
-              <input
-                type="email"
-                name="email"
-                value={formData.email}
-                onChange={handleChange}
-                required
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Email *</label>
+              <input type="email" name="email" value={formData.email} onChange={handleChange} required className={inputClass} placeholder="john@example.com" />
             </div>
-
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Roll Number *
-              </label>
-              <input
-                type="text"
-                name="roll_number"
-                value={formData.roll_number}
-                onChange={handleChange}
-                required
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Roll Number *</label>
+              <input type="text" name="roll_number" value={formData.roll_number} onChange={handleChange} required className={inputClass} placeholder="CS2024001" />
             </div>
-
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Department *
-              </label>
-              <select
-                name="department"
-                value={formData.department}
-                onChange={handleChange}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="Computer Science">Computer Science</option>
-                <option value="Electrical Engineering">
-                  Electrical Engineering
-                </option>
-                <option value="Mechanical Engineering">
-                  Mechanical Engineering
-                </option>
-                <option value="Civil Engineering">Civil Engineering</option>
-                <option value="Electronics">Electronics</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Semester *
-              </label>
-              <select
-                name="semester"
-                value={formData.semester}
-                onChange={handleChange}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                {[1, 2, 3, 4, 5, 6, 7, 8].map((sem) => (
-                  <option key={sem} value={sem}>
-                    Semester {sem}
-                  </option>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Department *</label>
+              <select name="department" value={formData.department} onChange={handleChange} className={inputClass}>
+                {["Computer Science", "Electrical Engineering", "Mechanical Engineering", "Civil Engineering", "Electronics"].map((d) => (
+                  <option key={d} value={d}>{d}</option>
                 ))}
               </select>
             </div>
-
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Academic Year
-              </label>
-              <input
-                type="text"
-                name="academic_year"
-                value={formData.academic_year}
-                onChange={handleChange}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="2024-2025"
-              />
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Semester *</label>
+              <select name="semester" value={formData.semester} onChange={handleChange} className={inputClass}>
+                {[1,2,3,4,5,6,7,8].map((s) => <option key={s} value={s}>Semester {s}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Academic Year</label>
+              <input type="text" name="academic_year" value={formData.academic_year} onChange={handleChange} className={inputClass} />
             </div>
           </div>
 
+          {/* Photo Upload */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Student Photo (for face recognition) *
-            </label>
-            <div className="flex items-center space-x-4">
+            <label className="block text-sm font-medium text-gray-700 mb-2">Student Photo *</label>
+            <div className="flex items-start gap-4">
               <div className="flex-shrink-0">
                 {photoPreview ? (
-                  <img
-                    className="h-24 w-24 rounded-lg object-cover border"
-                    src={photoPreview}
-                    alt="Preview"
-                  />
+                  <img className="h-24 w-24 rounded-2xl object-cover border-2 border-indigo-200 shadow-sm" src={photoPreview} alt="Preview" />
                 ) : (
-                  <div className="h-24 w-24 rounded-lg bg-gray-200 flex items-center justify-center border">
-                    <span className="text-gray-400 text-sm">No photo</span>
+                  <div className="h-24 w-24 rounded-2xl bg-gray-100 flex items-center justify-center border-2 border-dashed border-gray-300">
+                    <User className="w-8 h-8 text-gray-400" />
                   </div>
                 )}
               </div>
               <div className="flex-1">
                 <input
-                  id="photo"
+                  id="student-photo"
                   type="file"
                   accept="image/*"
                   onChange={handlePhotoChange}
                   required
-                  className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                  className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 file:cursor-pointer file:transition-colors"
                 />
-                <p className="text-xs text-gray-500 mt-1">
-                  Clear frontal face photo required. Will be used for automatic
-                  attendance.
-                </p>
+                <p className="text-xs text-gray-400 mt-2">Clear frontal face photo required. System validates quality automatically.</p>
               </div>
             </div>
           </div>
 
+          {/* Messages */}
           {message && (
-            <div
-              className={`p-4 rounded-md ${
-                message.includes("✅")
-                  ? "bg-green-50 text-green-700"
-                  : "bg-red-50 text-red-700"
-              }`}
-            >
+            <div className={`p-4 rounded-xl text-sm ${
+              message.includes("successfully")
+                ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                : "bg-red-50 text-red-700 border border-red-200"
+            }`}>
               {message}
             </div>
           )}
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-blue-600 text-white py-3 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-          >
-            {loading ? "Registering Student..." : "Register Student with Photo"}
+          {qualityIssues.length > 0 && (
+            <div className="p-4 rounded-xl bg-red-50 border border-red-200">
+              <p className="font-medium text-red-800 text-sm mb-2">Photo Quality Issues:</p>
+              <ul className="text-sm text-red-700 space-y-1">
+                {qualityIssues.map((issue, i) => <li key={i}>• {issue}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {qualityWarnings.length > 0 && (
+            <div className="p-4 rounded-xl bg-amber-50 border border-amber-200">
+              <p className="font-medium text-amber-800 text-sm mb-2">Warnings:</p>
+              <ul className="text-sm text-amber-700 space-y-1">
+                {qualityWarnings.map((w, i) => <li key={i}><AlertTriangle className="w-4 h-4 inline-block mr-1 align-text-bottom" /> {w}</li>)}
+              </ul>
+            </div>
+          )}
+
+          <button type="submit" disabled={loading} className="w-full btn-primary py-3 text-sm rounded-xl disabled:opacity-50 disabled:cursor-not-allowed">
+            {loading ? (
+              <span className="flex items-center justify-center gap-2">
+                <span className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full" />
+                Registering...
+              </span>
+            ) : "Register Student"}
           </button>
         </form>
+      </div>
 
-        <div className="mt-6 p-4 bg-blue-50 rounded-md">
-          <h3 className="font-semibold text-blue-800 mb-2">How it works:</h3>
-          <ul className="text-sm text-blue-700 space-y-1">
-            <li>• Student will be registered in the database</li>
-            <li>• Photo will be saved for face recognition training</li>
-            <li>• Face recognition model will be automatically updated</li>
-            <li>• Student can now be detected in class photos</li>
-          </ul>
-        </div>
+      {/* Info Card */}
+      <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-5">
+        <h3 className="font-semibold text-indigo-800 text-sm mb-2">How it works</h3>
+        <ul className="text-sm text-indigo-700 space-y-1.5">
+          <li className="flex items-start gap-2"><span className="text-indigo-400">•</span> Photo is validated for quality (blur, brightness, face detection)</li>
+          <li className="flex items-start gap-2"><span className="text-indigo-400">•</span> Face encoding is generated and stored for recognition</li>
+          <li className="flex items-start gap-2"><span className="text-indigo-400">•</span> Training image is saved — retrain model to include in recognition</li>
+          <li className="flex items-start gap-2"><span className="text-indigo-400">•</span> Default password is <code className="bg-indigo-100 px-1.5 py-0.5 rounded text-xs">123456</code></li>
+        </ul>
       </div>
     </div>
   );

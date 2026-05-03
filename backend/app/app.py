@@ -1,4 +1,4 @@
-# backend/app/app.py - JWT REMOVED COMPLETELY, SIMPLE USER_ID AUTH
+# backend/app/app.py - Enhanced with strict face recognition & quality validation
 
 from flask import Flask, request, jsonify, send_file
 from flask_sqlalchemy import SQLAlchemy
@@ -9,21 +9,30 @@ import pickle
 import numpy as np
 import json
 import os
+import re
 from datetime import datetime
 import pandas as pd
 from io import BytesIO
 from pathlib import Path
 
+# Import centralized configuration
+from app.config import (
+    SQLALCHEMY_DATABASE_URI,
+    FRONTEND_ORIGIN,
+    FLASK_DEBUG,
+    FLASK_PORT,
+    RECOGNITION_LOGGING_ENABLED,
+)
+
 app = Flask(__name__)
 
 # Configuration
-app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://root:root@localhost/attendance_db'
+app.config['SQLALCHEMY_DATABASE_URI'] = SQLALCHEMY_DATABASE_URI
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Initialize
 db = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
-from flask_cors import CORS
 
 CORS(app,
      supports_credentials=True,
@@ -90,6 +99,19 @@ class AttendanceSession(db.Model):
     total_marks = db.Column(db.Integer, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+class RecognitionLog(db.Model):
+    """Stores recognition attempt logs for auditing and diagnostics."""
+    id = db.Column(db.Integer, primary_key=True)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    image_filename = db.Column(db.String(200))
+    total_faces_detected = db.Column(db.Integer, default=0)
+    total_recognized = db.Column(db.Integer, default=0)
+    total_unknown = db.Column(db.Integer, default=0)
+    subject_id = db.Column(db.Integer, db.ForeignKey('subject.id'), nullable=True)
+    teacher_id = db.Column(db.Integer, db.ForeignKey('teacher.id'), nullable=True)
+    details = db.Column(db.Text)  # JSON string with per-face details
+    threshold_used = db.Column(db.Float)
+
 # Initialize database
 with app.app_context():
     db.create_all()
@@ -133,6 +155,34 @@ def save_student_map(student_map):
 @app.route('/')
 def home():
     return jsonify({"message": "API running", "auth": "jwt removed"})
+
+@app.route('/student/<email>/photo', methods=['GET'])
+def get_student_photo(email):
+    """Serve student's training photo if it exists."""
+    import glob
+    sanitized_at = email.replace("@", "_at_")
+    
+    # Try exact match with new convention first
+    sanitized_full = sanitized_at.replace(".", "_")
+    img_path = TRAINING_IMAGES_DIR / f"{sanitized_full}.jpg"
+    if img_path.exists():
+        from flask import send_file
+        return send_file(img_path, mimetype='image/jpeg')
+        
+    # Fallback for old conventions (e.g., nishant_at_example.com_1.jpg, nishant_at_example.com.jpg, etc)
+    pattern = str(TRAINING_IMAGES_DIR / f"{sanitized_at}*.*")
+    matches = glob.glob(pattern)
+    
+    if matches:
+        from flask import send_file
+        # Sort to get _1 or similar first, then return the first match
+        matches.sort()
+        # determine mimetype from extension
+        ext = matches[0].split('.')[-1].lower()
+        mime = 'image/png' if ext == 'png' else 'image/jpeg'
+        return send_file(matches[0], mimetype=mime)
+
+    return jsonify({"error": "Photo not found"}), 404
 
 # -------------------- AUTH --------------------
 
@@ -206,7 +256,7 @@ def login():
 # -------------------- DASHBOARD --------------------
 
 @app.route('/dashboard/stats', methods=['GET'])
-@cross_origin(origins=["http://localhost:5173"])
+
 def get_dashboard_stats():
     user, err, code = get_user()
     if err: return err, code
@@ -244,6 +294,7 @@ def get_dashboard_stats():
             "date": r.date,
             "subject": r.subject.name,
             "student": r.student.user.name,
+            "email": r.student.user.email,
             "marks": r.marks
         } for r in recent]
 
@@ -335,7 +386,24 @@ def register_student_with_photo():
     if User.query.filter_by(email=email).first():
         return jsonify({"error": "Email already registered"}), 400
 
-    # Save user
+    # ── Face Quality Validation ─────────────────────────────────────
+    uploads = BASE_DIR / "uploads"
+    uploads.mkdir(exist_ok=True)
+    temp_path = uploads / f"reg_temp_{datetime.now().timestamp()}.jpg"
+    photo.save(temp_path)
+
+    from app.utils.face_quality import validate_registration_image
+    quality_result = validate_registration_image(str(temp_path))
+
+    if not quality_result["valid"]:
+        temp_path.unlink()
+        return jsonify({
+            "error": quality_result["issues"][0] if quality_result["issues"] else "Image quality check failed",
+            "quality_issues": quality_result["issues"],
+            "quality_warnings": quality_result.get("warnings", []),
+        }), 400
+
+    # ── Create User & Student ───────────────────────────────────────
     new_user = User(
         email=email,
         password=bcrypt.generate_password_hash("123456").decode(),
@@ -345,7 +413,6 @@ def register_student_with_photo():
     db.session.add(new_user)
     db.session.flush()
 
-    # Save student
     new_student = Student(
         user_id=new_user.id,
         roll_number=roll,
@@ -355,33 +422,34 @@ def register_student_with_photo():
     db.session.add(new_student)
     db.session.commit()
 
-    # Process face
-    uploads = BASE_DIR / "uploads"
-    uploads.mkdir(exist_ok=True)
-    temp_path = uploads / f"reg_{new_user.id}.jpg"
-    photo.save(temp_path)
-
-    # Load & encode
+    # ── Generate & Save Encoding ────────────────────────────────────
     img = face_recognition.load_image_file(temp_path)
-    encodings = face_recognition.face_encodings(img)
+    face_locations = face_recognition.face_locations(img)
+    encodings = face_recognition.face_encodings(img, face_locations)
 
     if len(encodings) == 0:
         temp_path.unlink()
-        return jsonify({"error": "No face detected"}), 400
+        return jsonify({"error": "No face detected during encoding"}), 400
 
     encoding = encodings[0]
 
-    # Save encoding
-    enc_path = REFERENCE_ENCODINGS_DIR / f"{new_user.id}.pkl"
+    # Save individual encoding file
+    enc_path = REFERENCE_ENCODINGS_DIR / f"{new_user.id}_1.pkl"
     with open(enc_path, "wb") as f:
         pickle.dump(encoding, f)
 
-    # Update map
+    # ── Save Training Image ─────────────────────────────────────────
+    sanitized_email = email.replace("@", "_at_").replace(".", "_")
+    training_img_path = TRAINING_IMAGES_DIR / f"{sanitized_email}.jpg"
+    import shutil
+    shutil.copy2(str(temp_path), str(training_img_path))
+
+    # ── Update Student Map ──────────────────────────────────────────
     student_map = load_student_map()
-    student_map[str(new_user.id)] = {
+    student_map[email] = {
+        "student_id": new_student.id,
         "name": name,
-        "email": email,
-        "roll": roll,
+        "roll_number": roll,
         "department": department,
         "semester": semester
     }
@@ -389,11 +457,15 @@ def register_student_with_photo():
 
     temp_path.unlink()
 
-    return jsonify({
-        "message": "✅ Student registered successfully",
+    response_data = {
+        "message": "Student registered successfully",
         "student_id": new_student.id,
-        "user_id": new_user.id
-    }), 200
+        "user_id": new_user.id,
+    }
+    if quality_result.get("warnings"):
+        response_data["quality_warnings"] = quality_result["warnings"]
+
+    return jsonify(response_data), 200
 
 
 @app.route('/student/profile', methods=['GET'])
@@ -431,6 +503,46 @@ def student_profile():
     })
 
 
+@app.route('/student/attendance', methods=['GET'])
+
+def student_attendance():
+    """Student views their own detailed attendance records."""
+    user, err, code = get_user()
+    if err: return err, code
+
+    if user.role != 'student':
+        return jsonify({"error": "Only students"}), 403
+
+    student = Student.query.filter_by(user_id=user.id).first()
+    if not student:
+        return jsonify({"error": "Student record missing"}), 404
+
+    date_from = request.args.get("date_from", "").strip()
+    date_to = request.args.get("date_to", "").strip()
+    subject_code = request.args.get("subject", "").strip()
+
+    query = Attendance.query \
+        .join(Subject, Attendance.subject_id == Subject.id) \
+        .filter(Attendance.student_id == student.id)
+
+    if subject_code:
+        query = query.filter(Subject.code == subject_code)
+    if date_from:
+        query = query.filter(Attendance.date >= date_from)
+    if date_to:
+        query = query.filter(Attendance.date <= date_to)
+
+    records = query.order_by(Attendance.date.desc()).all()
+
+    return jsonify({"records": [{
+        "date": r.date,
+        "subject": r.subject.name,
+        "subject_code": r.subject.code,
+        "marks": r.marks,
+        "status": r.status,
+    } for r in records]})
+
+
 # -------------------- SUBJECTS --------------------
 
 @app.route('/subjects', methods=['GET'])
@@ -456,10 +568,105 @@ def get_subjects():
         for s in subjects
     ])
 
+
+@app.route('/subjects', methods=['POST'])
+
+def create_subject():
+    """Create a new subject for the logged-in teacher."""
+    user, err, code = get_user()
+    if err: return err, code
+
+    if user.role != 'teacher':
+        return jsonify({"error": "Only teachers can create subjects"}), 403
+
+    data = request.get_json()
+    name = data.get('name', '').strip()
+    subject_code = data.get('code', '').strip()
+    credits = data.get('credits', 3)
+    department = data.get('department', '').strip()
+    semester = data.get('semester')
+
+    if not name or not subject_code:
+        return jsonify({"error": "Subject name and code are required"}), 400
+
+    # Check for duplicate code
+    existing = Subject.query.filter_by(code=subject_code).first()
+    if existing:
+        return jsonify({"error": f"Subject code '{subject_code}' already exists"}), 400
+
+    teacher = Teacher.query.filter_by(user_id=user.id).first()
+
+    new_subject = Subject(
+        name=name,
+        code=subject_code,
+        credits=int(credits),
+        department=department or teacher.department if hasattr(teacher, 'department') else '',
+        semester=int(semester) if semester else 1,
+        teacher_id=teacher.id,
+    )
+    db.session.add(new_subject)
+    db.session.commit()
+
+    return jsonify({
+        "message": f"Subject '{name}' created successfully",
+        "subject": {
+            "id": new_subject.id,
+            "name": new_subject.name,
+            "code": new_subject.code,
+            "credits": new_subject.credits,
+            "department": new_subject.department,
+        }
+    }), 201
+
+
+@app.route('/subjects/<int:subject_id>', methods=['DELETE'])
+
+def delete_subject(subject_id):
+    """Delete a subject (teacher only, must own it)."""
+    user, err, code = get_user()
+    if err: return err, code
+
+    if user.role != 'teacher':
+        return jsonify({"error": "Only teachers"}), 403
+
+    teacher = Teacher.query.filter_by(user_id=user.id).first()
+    subject = Subject.query.filter_by(id=subject_id, teacher_id=teacher.id).first()
+
+    if not subject:
+        return jsonify({"error": "Subject not found or not owned by you"}), 404
+
+    db.session.delete(subject)
+    db.session.commit()
+    return jsonify({"message": f"Subject '{subject.name}' deleted"})
+
+
+# -------------------- TEACHER STUDENTS LIST --------------------
+
+@app.route('/teacher/students', methods=['GET'])
+
+def teacher_students():
+    """List all registered students."""
+    user, err, code = get_user()
+    if err: return err, code
+
+    if user.role != 'teacher':
+        return jsonify({"error": "Only teachers"}), 403
+
+    students = Student.query.join(User, Student.user_id == User.id).all()
+
+    return jsonify({"students": [{
+        "id": s.id,
+        "name": s.user.name,
+        "email": s.user.email,
+        "roll_number": s.roll_number,
+        "department": s.department,
+        "semester": s.semester,
+    } for s in students]})
+
 # -------------------- ATTENDANCE + FACE --------------------
 
 @app.route('/attendance/mark', methods=['POST'])
-@cross_origin(origins=["http://localhost:5173"])
+
 def mark_attendance():
     user, err, code = get_user()
     if err: return err, code
@@ -475,16 +682,23 @@ def mark_attendance():
     teacher = Teacher.query.filter_by(user_id=user.id).first()
     subject = Subject.query.filter_by(code=subject_code).first()
 
+    if not subject:
+        return jsonify({"error": "Subject not found"}), 404
+
     uploads = BASE_DIR / "uploads"
     uploads.mkdir(exist_ok=True)
     temp_path = uploads / f"temp_{datetime.now().timestamp()}.jpg"
     file.save(temp_path)
 
-    from utils.face_recognizer import FaceRecognizer
+    from app.utils.face_recognizer import FaceRecognizer
     recognizer = FaceRecognizer()
     results = recognizer.recognize_students(str(temp_path))
 
     temp_path.unlink()
+
+    # ── Filter recognized vs unknown ────────────────────────────────
+    recognized = [r for r in results if r["status"] == "recognized"]
+    unknown = [r for r in results if r["status"] == "unknown"]
 
     session = AttendanceSession(
         date=date,
@@ -498,8 +712,11 @@ def mark_attendance():
     marked = 0
     detected = []
 
-    for r in results:
+    for r in recognized:
         email = r["email"]
+        if not email:
+            continue
+
         stu_user = User.query.filter_by(email=email).first()
         if not stu_user:
             continue
@@ -524,12 +741,228 @@ def mark_attendance():
         marked += 1
         detected.append(r)
 
+    # ── Log recognition to database ─────────────────────────────────
+    if RECOGNITION_LOGGING_ENABLED:
+        from app.config import RECOGNITION_DISTANCE_THRESHOLD
+        log_entry = RecognitionLog(
+            total_faces_detected=len(results),
+            total_recognized=len(recognized),
+            total_unknown=len(unknown),
+            subject_id=subject.id,
+            teacher_id=teacher.id,
+            details=json.dumps({
+                "recognized": [r["email"] for r in recognized],
+                "unknown_count": len(unknown),
+            }),
+            threshold_used=RECOGNITION_DISTANCE_THRESHOLD,
+        )
+        db.session.add(log_entry)
+
     db.session.commit()
 
     return jsonify({
-        "message": f"Marked {marked}",
-        "detected": detected
+        "message": f"Marked {marked} student(s)",
+        "detected": detected,
+        "unknown_count": len(unknown),
+        "total_faces": len(results),
     })
+
+
+# ===============================
+#   RECOGNIZE ONLY (No save) — with annotated image
+# ===============================
+
+@app.route('/attendance/recognize', methods=['POST'])
+
+def recognize_faces():
+    """Recognize faces in uploaded image WITHOUT saving attendance.
+    Returns detected faces with bounding boxes AND a base64-encoded
+    annotated image for the verification UI."""
+    user, err, code = get_user()
+    if err: return err, code
+
+    if user.role != 'teacher':
+        return jsonify({"error": "Only teachers"}), 403
+
+    file = request.files.get('photo')
+    if not file:
+        return jsonify({"error": "No photo uploaded"}), 400
+
+    uploads = BASE_DIR / "uploads"
+    uploads.mkdir(exist_ok=True)
+    temp_path = uploads / f"recognize_{datetime.now().timestamp()}.jpg"
+    file.save(temp_path)
+
+    from app.utils.face_recognizer import FaceRecognizer
+    recognizer = FaceRecognizer()
+    results = recognizer.recognize_students(str(temp_path))
+
+    # Build annotated image with bounding boxes
+    import cv2, base64
+    img = cv2.imread(str(temp_path))
+    for r in results:
+        loc = r["location"]
+        top, right, bottom, left = loc["top"], loc["right"], loc["bottom"], loc["left"]
+        if r["status"] == "recognized":
+            color = (0, 200, 0)  # green
+            label = r["student"]
+        else:
+            color = (0, 0, 220)  # red
+            label = "Unknown"
+        cv2.rectangle(img, (left, top), (right, bottom), color, 2)
+        cv2.putText(img, label, (left, top - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+    _, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    annotated_b64 = base64.b64encode(buf).decode('utf-8')
+
+    temp_path.unlink()
+
+    recognized = [r for r in results if r["status"] == "recognized"]
+    unknown = [r for r in results if r["status"] == "unknown"]
+
+    return jsonify({
+        "results": results,
+        "recognized_count": len(recognized),
+        "unknown_count": len(unknown),
+        "total_faces": len(results),
+        "annotated_image": annotated_b64,
+    })
+
+
+# ===============================
+#   CONFIRM VERIFIED ATTENDANCE
+# ===============================
+
+@app.route('/attendance/confirm', methods=['POST'])
+
+def confirm_attendance():
+    """Save attendance after teacher verification.
+    Expects JSON: { date, subject_code, marks, confirmed_emails: [...] }"""
+    user, err, code = get_user()
+    if err: return err, code
+
+    if user.role != 'teacher':
+        return jsonify({"error": "Only teachers"}), 403
+
+    data = request.get_json()
+    date = data.get('date')
+    subject_code = data.get('subject_code')
+    marks = data.get('marks', 1)
+    confirmed_emails = data.get('confirmed_emails', [])
+
+    if not date or not subject_code:
+        return jsonify({"error": "Missing date or subject"}), 400
+
+    teacher = Teacher.query.filter_by(user_id=user.id).first()
+    subject = Subject.query.filter_by(code=subject_code).first()
+    if not subject:
+        return jsonify({"error": "Subject not found"}), 404
+
+    session = AttendanceSession(
+        date=date, subject_id=subject.id,
+        teacher_id=teacher.id, total_marks=marks
+    )
+    db.session.add(session)
+    db.session.flush()
+
+    marked = 0
+    for email in confirmed_emails:
+        stu_user = User.query.filter_by(email=email).first()
+        if not stu_user:
+            continue
+        student = Student.query.filter_by(user_id=stu_user.id).first()
+        if not student:
+            continue
+
+        exists = Attendance.query.filter_by(
+            date=date, subject_id=subject.id, student_id=student.id
+        ).first()
+        if not exists:
+            db.session.add(Attendance(
+                date=date, subject_id=subject.id,
+                student_id=student.id, marks=marks, status='present'
+            ))
+        marked += 1
+
+    if RECOGNITION_LOGGING_ENABLED:
+        from app.config import RECOGNITION_DISTANCE_THRESHOLD
+        db.session.add(RecognitionLog(
+            total_faces_detected=len(confirmed_emails),
+            total_recognized=marked, total_unknown=0,
+            subject_id=subject.id, teacher_id=teacher.id,
+            details=json.dumps({"confirmed_emails": confirmed_emails, "mode": "verified"}),
+            threshold_used=RECOGNITION_DISTANCE_THRESHOLD,
+        ))
+
+    db.session.commit()
+    return jsonify({"message": f"Attendance confirmed for {marked} student(s)", "marked": marked})
+
+
+# ===============================
+#   STUDENT SEARCH (for manual add)
+# ===============================
+
+@app.route('/students/search', methods=['GET'])
+
+def search_students():
+    """Search students by name or roll number for manual attendance addition."""
+    user, err, code = get_user()
+    if err: return err, code
+
+    if user.role != 'teacher':
+        return jsonify({"error": "Only teachers"}), 403
+
+    q = request.args.get('q', '').strip()
+    if len(q) < 2:
+        return jsonify({"students": []})
+
+    students = Student.query.join(User, Student.user_id == User.id).filter(
+        db.or_(
+            User.name.ilike(f'%{q}%'),
+            Student.roll_number.ilike(f'%{q}%'),
+            User.email.ilike(f'%{q}%'),
+        )
+    ).limit(10).all()
+
+    return jsonify({"students": [{
+        "student_id": s.id,
+        "name": s.user.name,
+        "email": s.user.email,
+        "roll_number": s.roll_number,
+        "department": s.department,
+    } for s in students]})
+
+
+# ===============================
+#   MODEL RETRAIN
+# ===============================
+
+@app.route('/teacher/retrain', methods=['POST'])
+
+def retrain_model():
+    """Trigger face recognition model retraining."""
+    user, err, code = get_user()
+    if err: return err, code
+
+    if user.role != 'teacher':
+        return jsonify({"error": "Only teachers"}), 403
+
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['python', str(BASE_DIR.parent / 'train_model.py')],
+            capture_output=True, text=True, timeout=120
+        )
+        return jsonify({
+            "message": "Model retrained successfully",
+            "output": result.stdout[-1000:] if result.stdout else "",
+            "errors": result.stderr[-500:] if result.stderr else "",
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Training timed out. Try again."}), 500
+    except Exception as e:
+        return jsonify({"error": f"Training failed: {str(e)}"}), 500
 
 
 # ===============================
@@ -577,6 +1010,7 @@ def attendance_history():
 
         output.append({
             "student": student_user.name,
+            "email": student_user.email,
             "roll": r.student.roll_number,
             "department": r.student.department,
             "subject": r.subject.name,
@@ -591,69 +1025,58 @@ def attendance_history():
 
 
 # ===============================
-#   ATTENDANCE EXPORT (CSV)
+#   ATTENDANCE EXPORT (Excel)
 # ===============================
-import csv
-from io import StringIO
-from flask import Response
 
 @app.route("/attendance/export", methods=["GET"])
-@cross_origin(origins=["http://localhost:5173"])
+
 def attendance_export():
     user_id = request.headers.get("x-user-id")
-
     if not user_id:
         return jsonify({"error": "Missing user_id"}), 400
 
-    # Same filters as history
-    date = request.args.get("date")
-    month = request.args.get("month")
-    year = request.args.get("year")
-    student_id = request.args.get("student_id")
-    department = request.args.get("department")
+    subject = request.args.get("subject", "").strip()
+    date_from = request.args.get("date_from", "").strip()
+    date_to = request.args.get("date_to", "").strip()
 
-    query = Attendance.query.join(User, Attendance.student_id == User.id)
+    query = Attendance.query \
+        .join(Student, Attendance.student_id == Student.id) \
+        .join(User, Student.user_id == User.id) \
+        .join(Subject, Attendance.subject_id == Subject.id)
 
-    if date:
-        query = query.filter(Attendance.date == date)
+    if subject:
+        query = query.filter(Subject.code == subject)
+    if date_from:
+        query = query.filter(Attendance.date >= date_from)
+    if date_to:
+        query = query.filter(Attendance.date <= date_to)
 
-    if month and year:
-        query = query.filter(
-            extract("month", Attendance.date) == int(month),
-            extract("year", Attendance.date) == int(year)
-        )
+    records = query.order_by(Attendance.date.desc()).all()
 
-    if student_id:
-        query = query.filter(Attendance.student_id == student_id)
-
-    if department:
-        query = query.filter(User.department == department)
-
-    records = query.all()
-
-    # Build CSV
-    si = StringIO()
-    writer = csv.writer(si)
-    writer.writerow(["Student", "Roll", "Department", "Date", "Time", "Status"])
-
+    rows = []
     for r in records:
-        student = User.query.get(r.student_id)
-        writer.writerow([
-            student.name,
-            student.roll,
-            student.department,
-            r.date.strftime("%Y-%m-%d"),
-            r.timestamp.strftime("%I:%M %p"),
-            "Present"
-        ])
+        rows.append({
+            "Date": r.date,
+            "Subject": r.subject.name,
+            "Subject Code": r.subject.code,
+            "Student": r.student.user.name,
+            "Roll Number": r.student.roll_number,
+            "Department": r.student.department,
+            "Marks": r.marks,
+            "Status": r.status,
+        })
 
-    output = si.getvalue()
-    si.close()
+    df = pd.DataFrame(rows)
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Attendance")
+    output.seek(0)
 
-    return Response(
+    return send_file(
         output,
-        mimetype="text/csv",
-        headers={"Content-Disposition": "attachment; filename=attendance_export.csv"}
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name="attendance_export.xlsx",
     )
 
 
@@ -661,4 +1084,4 @@ def attendance_export():
 
 if __name__ == '__main__':
     print("\nAPI running\n")
-    app.run(debug=True, port=5000)
+    app.run(debug=FLASK_DEBUG, port=FLASK_PORT, host="0.0.0.0")
